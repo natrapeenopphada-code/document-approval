@@ -297,6 +297,7 @@ function uploadPdf_(input, folderName) {
   const cfg = configMap_();
   let folder = null;
   if (folderName === 'Approved' && cfg.APPROVED_FOLDER_ID) folder = DriveApp.getFolderById(String(cfg.APPROVED_FOLDER_ID));
+  if (folderName === 'Original' && cfg.ORIGINAL_FOLDER_ID) folder = DriveApp.getFolderById(String(cfg.ORIGINAL_FOLDER_ID));
   if (!folder) {
     const rootId = getRootFolderId_();
     if (!rootId) throw new Error('ROOT_FOLDER_ID is not configured');
