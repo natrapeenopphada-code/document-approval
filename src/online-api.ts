@@ -98,3 +98,32 @@ export async function apiPost<T>(action: string, payload: unknown): Promise<T> {
 export async function testApprovalApi() {
   return apiGet<OnlineHealth>('health');
 }
+
+
+export type CompanyMaster = {
+  companyCode: string;
+  companyName: string;
+  logoFileId?: string;
+  stampFileId?: string;
+  active?: boolean;
+};
+
+export type SignerMaster = {
+  signerKey: string;
+  displayName: string;
+  role: string;
+  signatureFileId?: string;
+  companyCodes?: string[];
+  canProxy?: boolean;
+  active?: boolean;
+};
+
+export async function listOnlineCompanies() {
+  const r = await apiGet<{ok:boolean;companies:CompanyMaster[]}>('listCompanies');
+  return r.companies || [];
+}
+
+export async function listOnlineSigners(companyCode: string) {
+  const r = await apiGet<{ok:boolean;signers:SignerMaster[]}>('listSigners', { companyCode });
+  return r.signers || [];
+}
