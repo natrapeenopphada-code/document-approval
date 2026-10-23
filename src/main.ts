@@ -1,4 +1,6 @@
 import './styles.css';
+import { onlineWorkspaceHtml, wireOnlineWorkspace } from './online-workspace';
+import { getApprovalApiUrl, setApprovalApiUrl, testApprovalApi } from './online-api';
 
 declare global {
   interface Window {
@@ -122,7 +124,9 @@ function render() {
         <div><h1>อนุมัติเอกสาร</h1><div class='sub'>DOCUMENT WORKSPACE</div></div>
       </div>
       <div class='nav'>
-        <button data-view='approve' class='${view === 'approve' ? 'active' : ''}'>อนุมัติเอกสาร</button>
+        <button data-view='inbox' class='${view === 'inbox' ? 'active' : ''}'>กล่องเอกสาร</button>
+        <button data-view='packets' class='${view === 'packets' ? 'active' : ''}'>ชุดอนุมัติ</button>
+        <button data-view='approve' class='${view === 'approve' ? 'active' : ''}'>วางจุดอนุมัติ</button>
         <button data-view='tools' class='${view === 'tools' ? 'active' : ''}'>เครื่องมือเอกสาร</button>
         <button id='historyBtn'>ประวัติการอนุมัติ</button>
         <button id='settingsBtn'>ตั้งค่า</button>
@@ -133,7 +137,7 @@ function render() {
       </div>
       ${view === 'approve' ? `<div class='field'><label>PDF ต้นฉบับ</label><input id='pdfFile' type='file' accept='.pdf,application/pdf'></div><div class='thumbTitle'>หน้าเอกสาร</div><div id='thumbs' class='thumbs'></div>` : ''}
     </aside>
-    <main class='main'>${view === 'tools' ? toolsHtml() : approveHtml()}</main>
+    <main class='main'>${view === 'tools' ? toolsHtml() : (view === 'inbox' || view === 'packets') ? onlineWorkspaceHtml(view as 'inbox' | 'packets', comp().signers as Array<[string,string]>) : approveHtml()}</main>
     ${view === 'approve' ? `<aside id='inspector' class='inspect'></aside>` : ''}
   </div>`;
 
@@ -150,6 +154,7 @@ function render() {
   $('#settingsBtn').onclick = showSettings;
   $('#historyBtn').onclick = showHistory;
   if (view === 'tools') wireTools();
+  else if (view === 'inbox' || view === 'packets') wireOnlineWorkspace(view as 'inbox' | 'packets', comp().signers as Array<[string,string]>, render, showModal);
   else wireApprove();
 }
 
