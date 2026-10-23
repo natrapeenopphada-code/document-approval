@@ -206,8 +206,7 @@ function createPacket_(input) {
   if (missing.length) throw new Error('มีเอกสารในชุดที่ไม่พบข้อมูล');
   packetRequests.forEach(req => {
     if (!Array.isArray(req.markers) || !req.markers.length) throw new Error('เอกสาร ' + req.requestNo + ' ยังไม่มีจุดอนุมัติ');
-    let allowed = [];
-    try { allowed = JSON.parse(String(signer.companyCodesJson || '[]')); } catch (_) { allowed = []; }
+    const allowed = Array.isArray(signer.companyCodes) ? signer.companyCodes : [];
     if (!allowed.map(String).includes(String(req.companyCode))) throw new Error('ผู้ลงนามนี้ไม่ได้รับอนุญาตสำหรับบริษัท ' + req.companyCode);
   });
   const now = new Date().toISOString();
@@ -242,8 +241,7 @@ function proxyApprovePacket_(input) {
     const req = getRecord_(REQUESTS_SHEET, String(requestId));
     if (!req) return;
     if (!Array.isArray(req.markers) || !req.markers.length) throw new Error('เอกสาร ' + req.requestNo + ' ยังไม่มีจุดอนุมัติ');
-    let allowed = [];
-    try { allowed = JSON.parse(String(signer.companyCodesJson || '[]')); } catch (_) { allowed = []; }
+    const allowed = Array.isArray(signer.companyCodes) ? signer.companyCodes : [];
     if (!allowed.map(String).includes(String(req.companyCode))) throw new Error('ผู้ลงนามนี้ไม่ได้รับอนุญาตสำหรับบริษัท ' + req.companyCode);
     req.status = 'approved_proxy';
     req.returnedComment = '';
