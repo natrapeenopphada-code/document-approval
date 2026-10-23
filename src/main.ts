@@ -1,5 +1,5 @@
 import './styles.css';
-import { onlineWorkspaceHtml, wireOnlineWorkspace } from './online-workspace';
+import { invalidateOnlineWorkspace, onlineWorkspaceHtml, wireOnlineWorkspace } from './online-workspace';
 import { getApprovalApiUrl, setApprovalApiUrl, testApprovalApi } from './online-api';
 
 declare global {
@@ -137,7 +137,7 @@ function render() {
       </div>
       ${view === 'approve' ? `<div class='field'><label>PDF ต้นฉบับ</label><input id='pdfFile' type='file' accept='.pdf,application/pdf'></div><div class='thumbTitle'>หน้าเอกสาร</div><div id='thumbs' class='thumbs'></div>` : ''}
     </aside>
-    <main class='main'>${view === 'tools' ? toolsHtml() : (view === 'inbox' || view === 'packets') ? onlineWorkspaceHtml(view as 'inbox' | 'packets', comp().signers as Array<[string,string]>) : approveHtml()}</main>
+    <main class='main'>${view === 'tools' ? toolsHtml() : (view === 'inbox' || view === 'packets') ? onlineWorkspaceHtml(view as 'inbox' | 'packets', company) : approveHtml()}</main>
     ${view === 'approve' ? `<aside id='inspector' class='inspect'></aside>` : ''}
   </div>`;
 
@@ -148,13 +148,14 @@ function render() {
 
   ($('#company') as HTMLSelectElement).onchange = e => {
     company = (e.target as HTMLSelectElement).value;
+    invalidateOnlineWorkspace();
     render();
   };
 
   $('#settingsBtn').onclick = showSettings;
   $('#historyBtn').onclick = showHistory;
   if (view === 'tools') wireTools();
-  else if (view === 'inbox' || view === 'packets') wireOnlineWorkspace(view as 'inbox' | 'packets', comp().signers as Array<[string,string]>, render, showModal);
+  else if (view === 'inbox' || view === 'packets') wireOnlineWorkspace(view as 'inbox' | 'packets', company, render, showModal);
   else wireApprove();
 }
 
