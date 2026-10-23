@@ -5,6 +5,7 @@ const AUDIT_SHEET = 'Audit';
 const CONFIG_SHEET = 'Config';
 const COMPANIES_SHEET = 'Companies';
 const SIGNERS_SHEET = 'Signers';
+const DELEGATIONS_SHEET = 'Delegations';
 
 function doGet(e) {
   try {
@@ -20,6 +21,7 @@ function doGet(e) {
     if (action === 'listPackets') return json_({ ok: true, packets: listRecords_(PACKETS_SHEET) });
     if (action === 'listCompanies') return json_({ ok: true, companies: listActiveCompanies_() });
     if (action === 'listSigners') return json_({ ok: true, signers: listActiveSigners_(String(e.parameter.companyCode || '')) });
+    if (action === 'listDelegations') return json_({ ok: true, delegations: listActiveDelegations_(String(e.parameter.signerKey || ''), String(e.parameter.companyCode || '')) });
     if (action === 'getConfig') return json_({ ok: true, config: configMap_() });
     if (action === 'getRequest') return json_({ ok: true, request: getRecord_(REQUESTS_SHEET, String(e.parameter.id || '')) });
     throw new Error('Unsupported action: ' + action);
@@ -124,6 +126,33 @@ function signerByKey_(key) {
 
 function companyByCode_(code) {
   return listActiveCompanies_().find(r => String(r.companyCode) === String(code)) || null;
+}
+
+function listActiveDelegations_(signerKey, companyCode) {
+  const now = new Date().getTime();
+  return listRecords_(DELEGATIONS_SHEET).filter(r => {
+    const active = r.active === true || String(r.active).toUpperCase() === 'TRUE';
+    if (!active) return false;
+    if (signerKey && String(r.signerKey) !== String(signerKey)) return false;
+    const start = r.startAt ? new Date(r.startAt).getTime() : -Infinity;
+    const end = r.endAt ? new Date(r.endAt).getTime() : Infinity;
+    if (Number.isFinite(start) && now < start) return false;
+    if (Number.isFinite(end) && now > end) return false;
+    let codes = [];
+    try { codes = JSON.parse(String(r.companyCodesJson || '[]')); } catch (_) { codes = []; }
+    if (companyCode && codes.length && !codes.map(String).includes(String(companyCode))) return false;
+    r.companyCodes = codes;
+    delete r.companyCodesJson;
+    return true;
+  });
+}
+
+function requireDelegation_(signerKey, companyCode) {
+  const actor = String(currentUser_() || '').trim().toLowerCase();
+  if (!actor || actor === 'unknown') throw new Error('ไม่สามารถยืนยันผู้ใช้งานสำหรับ Proxy Approval ได้');
+  const delegation = listActiveDelegations_(signerKey, companyCode).find(r => String(r.delegateEmail || '').trim().toLowerCase() === actor);
+  if (!delegation) throw new Error('บัญชีนี้ไม่มี Delegation ที่ใช้งานได้สำหรับผู้บริหาร/บริษัทนี้');
+  return delegation;
 }
 
 function listRecords_(sheetName) {
@@ -243,10 +272,12 @@ function proxyApprovePacket_(input) {
     if (!Array.isArray(req.markers) || !req.markers.length) throw new Error('เอกสาร ' + req.requestNo + ' ยังไม่มีจุดอนุมัติ');
     const allowed = Array.isArray(signer.companyCodes) ? signer.companyCodes : [];
     if (!allowed.map(String).includes(String(req.companyCode))) throw new Error('ผู้ลงนามนี้ไม่ได้รับอนุญาตสำหรับบริษัท ' + req.companyCode);
+    const delegation = requireDelegation_(String(packet.signerKey || ''), String(req.companyCode || ''));
     req.status = 'approved_proxy';
+    req.proxyDelegationId = delegation.id;
     req.returnedComment = '';
     saveRequest_(req);
-    audit_('request', req.id, 'PROXY_APPROVE', reason);
+    audit_('request', req.id, 'PROXY_APPROVE', reason + ' | delegation=' + String(delegation.id || ''));
   });
   packet.mode = 'secretary_proxy';
   packet.proxyReason = reason;
