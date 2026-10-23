@@ -50,6 +50,21 @@ let assets: AssetMap = JSON.parse(localStorage.getItem('approvalAssets') || '{}'
 let history: Hist[] = JSON.parse(localStorage.getItem('approvalHistory') || '[]');
 let sizes: Record<string, { w: number; h: number }> = JSON.parse(localStorage.getItem('approvalSizes') || '{}');
 
+type DraftRecord = {
+  id: 'active';
+  name: string;
+  lastModified: number;
+  company: string;
+  page: number;
+  objects: Obj[];
+  blob: Blob;
+  savedAt: string;
+};
+
+let previewErrors: number[] = [];
+let preflightReady = false;
+let draftSaveTimer: number | null = null;
+
 const companies = [
   { code: 'NSF', name: 'Nopphada Superfoods Co.,Ltd', signers: [['sig1', 'นพดา'], ['sig2', 'กานต์']] },
   { code: 'NSS', name: 'Nopphada Seasoning Co.,Ltd', signers: [['sig1', 'นพดา'], ['sig2', 'กานต์']] },
@@ -145,28 +160,24 @@ function toolsHtml() {
 
 function approveHtml() {
   const c = comp();
-  return `<div class='appTop'><div><div class='eyebrow'>DOCUMENT WORKSPACE</div><h2>จัดเตรียมและลงนามเอกสาร</h2><p>รวมเอกสาร จัดหน้า ลบหน้า และลงนามได้ในหน้าเดียว</p></div><div class='savePrint'><button id='saveApproved' class='primary'>Save As</button><button id='printApproved' class='printBtn'>🖨 Print</button></div></div><div class='docbar'><input id='appendPdf' class='hidden' type='file' accept='.pdf,application/pdf' multiple><button id='appendPdfBtn'>+ เพิ่มเอกสาร</button><button id='selectAllPages'>เลือกทุกหน้า</button><button id='clearPageSelection'>ยกเลิกเลือก</button><button id='deleteSelectedPages' class='danger'>ลบหน้าที่เลือก <span id='deleteCount'></span></button><span class='docHint'>ติ๊กหน้าในแถบซ้ายเพื่อลบหลายหน้าพร้อมกัน</span></div><div class='toolbar'>${c.signers.map(s => `<button data-img='signature_${s[0]}'>${s[1]}</button>`).join('')}${c.signers.map(s => `<button data-img='combined_${company}_${s[0]}' class='soft'>${s[1]}+ตรา</button>`).join('')}<button data-img='stamp_${company}' class='soft'>ตราปั๊ม</button><button data-img='logo_${company}' class='soft'>โลโก้</button><button id='addText'>ข้อความ</button><button id='addDate'>วันที่</button><button id='addWatermark'>คาดเอกสาร</button><button id='copyBtn'>คัดลอก</button><button id='pasteBtn'>วาง</button><button id='deleteBtn' class='danger'>ลบ</button></div><div id='status' class='status'>${previewDoc ? `หน้า ${page} / ${previewDoc.numPages}` : 'พร้อมรับเอกสาร'}</div><div class='zoombar'><button id='fitBtn'>พอดีหน้า</button><button id='widthBtn'>พอดีกว้าง</button><button data-z='.75'>75%</button><button data-z='1'>100%</button><button data-z='1.25'>125%</button><span id='zoomText'>${Math.round(zoom * 100)}%</span><div class='spacer'></div><button id='prev'>‹</button><button id='next'>›</button></div><div id='workarea' class='workarea'><div id='stage' class='stage'><canvas id='preview'></canvas><div id='overlay' class='overlay'></div></div><div id='quick' class='quick'><button id='qCopy'>คัดลอก</button><button id='qPaste'>วาง</button><button id='qDelete' class='danger'>ลบ</button></div></div>`;
+  return `<div class='appTop'><div><div class='eyebrow'>DOCUMENT WORKSPACE</div><h2>จัดเตรียมและลงนามเอกสาร</h2><p>รวมเอกสาร จัดหน้า ลบหน้า และลงนามได้ในหน้าเดียว</p></div><div class='savePrint'><button id='saveApproved' class='primary'>Save As</button><button id='printApproved' class='printBtn'>🖨 Print</button></div></div><div class='docbar'><input id='appendPdf' class='hidden' type='file' accept='.pdf,application/pdf' multiple><button id='appendPdfBtn'>+ เพิ่มเอกสาร</button><button id='retryPreview'>ตรวจ Preview ใหม่</button><button id='selectAllPages'>เลือกทุกหน้า</button><button id='clearPageSelection'>ยกเลิกเลือก</button><button id='deleteSelectedPages' class='danger'>ลบหน้าที่เลือก <span id='deleteCount'></span></button><span class='docHint'>ติ๊กหน้าในแถบซ้ายเพื่อลบหลายหน้าพร้อมกัน</span></div><div class='toolbar'>${c.signers.map(s => `<button data-img='signature_${s[0]}'>${s[1]}</button>`).join('')}${c.signers.map(s => `<button data-img='combined_${company}_${s[0]}' class='soft'>${s[1]}+ตรา</button>`).join('')}<button data-img='stamp_${company}' class='soft'>ตราปั๊ม</button><button data-img='logo_${company}' class='soft'>โลโก้</button><button id='addText'>ข้อความ</button><button id='addDate'>วันที่</button><button id='addWatermark'>คาดเอกสาร</button><button id='copyBtn'>คัดลอก</button><button id='pasteBtn'>วาง</button><button id='deleteBtn' class='danger'>ลบ</button></div><div id='status' class='status'>${previewDoc ? `หน้า ${page} / ${previewDoc.numPages}` : 'พร้อมรับเอกสาร'}</div><div class='zoombar'><button id='fitBtn'>พอดีหน้า</button><button id='widthBtn'>พอดีกว้าง</button><button data-z='.75'>75%</button><button data-z='1'>100%</button><button data-z='1.25'>125%</button><span id='zoomText'>${Math.round(zoom * 100)}%</span><div class='spacer'></div><button id='prev'>‹</button><button id='next'>›</button></div><div id='workarea' class='workarea'><div id='stage' class='stage'><canvas id='preview'></canvas><div id='overlay' class='overlay'></div></div><div id='quick' class='quick'><button id='qCopy'>คัดลอก</button><button id='qPaste'>วาง</button><button id='qDelete' class='danger'>ลบ</button></div></div>`;
 }
 
 function wireApprove() {
   const input = $('#pdfFile') as HTMLInputElement;
   input.onchange = async () => {
-    currentPdf = input.files?.[0] || null;
-    if (!currentPdf) return;
-    approvalBytes = (await currentPdf.arrayBuffer()).slice(0);
-    deletePages.clear();
-    previewDoc = await window.pdfjsLib.getDocument({ data: approvalBytes.slice(0) }).promise;
-    page = 1;
-    objects = [];
-    selected = null;
-    zoomMode = 'fit';
-    await drawPreview();
-    await renderThumbs();
-    updateInspector();
+    const file = input.files?.[0] || null;
+    input.value = '';
+    if (!file) return;
+    await loadApprovalFile(file);
   };
 
   const append = $('#appendPdf') as HTMLInputElement;
   $('#appendPdfBtn').onclick = () => append.click();
+  $('#retryPreview').onclick = async () => {
+    if (!currentPdf) return setPreflightStatus('กรุณาเลือก PDF ก่อน', false);
+    await loadApprovalFile(currentPdf, true);
+  };
   append.onchange = async () => {
     const files = Array.from(append.files || []);
     append.value = '';
@@ -214,6 +225,71 @@ function wireApprove() {
   window.onresize = () => { if (view === 'approve' && previewDoc && zoomMode !== 'manual') drawPreview(); };
 }
 
+function setPreflightStatus(message: string, ok: boolean | null = null) {
+  const st = document.querySelector('#status') as HTMLElement | null;
+  if (!st) return;
+  st.textContent = message;
+  st.classList.toggle('ready', ok === true);
+  st.classList.toggle('error', ok === false);
+}
+
+async function loadApprovalFile(file: File, keepObjects = false) {
+  preflightReady = false;
+  previewErrors = [];
+  setPreflightStatus('กำลังตรวจไฟล์และสร้าง Preview...', null);
+  try {
+    if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') throw new Error('รองรับเฉพาะไฟล์ PDF');
+    const bytes = (await file.arrayBuffer()).slice(0);
+    const candidate = await window.pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+    if (!candidate?.numPages) throw new Error('ไม่พบหน้าเอกสารใน PDF');
+
+    for (let n = 1; n <= candidate.numPages; n++) {
+      const p = await candidate.getPage(n);
+      const v = p.getViewport({ scale: 1 });
+      if (!Number.isFinite(v.width) || !Number.isFinite(v.height) || v.width <= 0 || v.height <= 0) {
+        throw new Error('อ่านขนาดหน้า ' + n + ' ไม่สำเร็จ');
+      }
+    }
+
+    currentPdf = file;
+    approvalBytes = bytes;
+    deletePages.clear();
+    previewDoc = candidate;
+    page = 1;
+    if (!keepObjects) objects = [];
+    selected = null;
+    zoomMode = 'fit';
+
+    await drawPreview();
+    await renderThumbs();
+    preflightReady = previewErrors.length === 0;
+    if (!preflightReady) {
+      setPreflightStatus('❌ Preview ไม่สมบูรณ์ • เปิดไม่ได้ที่หน้า ' + previewErrors.join(', ') + ' • กด “ตรวจ Preview ใหม่”', false);
+      return false;
+    }
+
+    setPreflightStatus('✓ พร้อมวางจุดอนุมัติ • ' + previewDoc.numPages + ' หน้า', true);
+    updateInspector();
+    if (!keepObjects) scheduleDraftSave(true);
+    return true;
+  } catch (err: unknown) {
+    console.error('[approval-preflight]', err);
+    preflightReady = false;
+    const message = err instanceof Error ? err.message : String(err);
+    setPreflightStatus('❌ เอกสารยังไม่พร้อมอนุมัติ • ' + message, false);
+    return false;
+  }
+}
+
+function scheduleDraftSave(immediate = false) {
+  if (!currentPdf || !approvalBytes) return;
+  if (draftSaveTimer != null) window.clearTimeout(draftSaveTimer);
+  draftSaveTimer = window.setTimeout(() => {
+    draftSaveTimer = null;
+    void saveActiveDraft();
+  }, immediate ? 0 : 350);
+}
+
 async function drawPreview() {
   if (!previewDoc) return;
   const p = await previewDoc.getPage(page);
@@ -242,7 +318,7 @@ function remembered(kind: string) {
 }
 
 function addImage(kind: string) {
-  if (!previewDoc) return alert('กรุณาเลือก PDF ก่อน');
+  if (!previewDoc || !preflightReady) return alert('เอกสารยังไม่ผ่านการตรวจ Preview กรุณาตรวจ Preview ให้พร้อมก่อนวางจุดอนุมัติ');
   const src = assets[kind];
   if (!src) return alert('ยังไม่ได้ตั้งค่าไฟล์นี้ ไปที่เมนู “ตั้งค่า” ก่อน');
   const s = remembered(kind);
@@ -251,16 +327,18 @@ function addImage(kind: string) {
   selected = o.id;
   drawObjects();
   updateInspector();
+  scheduleDraftSave();
 }
 
 function addText(kind: string, text: string) {
-  if (!previewDoc) return alert('กรุณาเลือก PDF ก่อน');
+  if (!previewDoc || !preflightReady) return alert('เอกสารยังไม่ผ่านการตรวจ Preview กรุณาตรวจ Preview ให้พร้อมก่อนวางจุดอนุมัติ');
   const wm = kind === 'watermark';
   const o: Obj = { id: uid(), page, type: 'text', kind, text, nx: wm ? .18 : .12, ny: wm ? .43 : .16, nw: wm ? .64 : .30, nh: wm ? .10 : .08, rot: wm ? -30 : 0, opacity: wm ? 18 : 100, font: wm ? 28 : 20, color: wm ? '#6f7d82' : '#283b43' };
   objects.push(o);
   selected = o.id;
   drawObjects();
   updateInspector();
+  scheduleDraftSave();
 }
 
 function drawObjects() {
@@ -319,6 +397,7 @@ function dragObj(e: PointerEvent, o: Obj, el: HTMLElement) {
     el.onpointercancel = null;
     drawObjects();
     updateInspector();
+    scheduleDraftSave();
   };
   el.onpointerup = end;
   el.onpointercancel = end;
@@ -345,6 +424,7 @@ function resizeObj(e: PointerEvent, o: Obj, h: HTMLElement) {
     persist();
     h.onpointermove = null; h.onpointerup = null; h.onpointercancel = null;
     drawObjects(); updateInspector();
+    scheduleDraftSave();
   };
   h.onpointerup = end; h.onpointercancel = end;
 }
@@ -366,6 +446,7 @@ function rotateObj(e: PointerEvent, o: Obj, h: HTMLElement) {
     if (raf) { cancelAnimationFrame(raf); apply(); }
     h.onpointermove = null; h.onpointerup = null; h.onpointercancel = null;
     drawObjects(); updateInspector();
+    scheduleDraftSave();
   };
   h.onpointerup = end; h.onpointercancel = end;
 }
@@ -374,9 +455,9 @@ function copyObj() { const o = current(); if (o) clipboard = JSON.parse(JSON.str
 function pasteObj() {
   if (!clipboard || !previewDoc) return;
   const o = { ...JSON.parse(JSON.stringify(clipboard)), id: uid(), page, nx: Math.min(.92, clipboard.nx + .02), ny: Math.min(.92, clipboard.ny + .02) };
-  objects.push(o); selected = o.id; drawObjects(); updateInspector();
+  objects.push(o); selected = o.id; drawObjects(); updateInspector(); scheduleDraftSave();
 }
-function deleteObj() { if (!selected) return; objects = objects.filter(o => o.id !== selected); selected = null; drawObjects(); updateInspector(); }
+function deleteObj() { if (!selected) return; objects = objects.filter(o => o.id !== selected); selected = null; drawObjects(); updateInspector(); scheduleDraftSave(); }
 
 function updateInspector() {
   const box = $('#inspector');
@@ -386,7 +467,7 @@ function updateInspector() {
   if (!o) return;
   const bind = (id: string, fn: (v: string) => void) => {
     const el = document.querySelector(id) as HTMLInputElement | HTMLTextAreaElement | null;
-    if (el) el.oninput = () => { fn(el.value); drawObjects(); };
+    if (el) el.oninput = () => { fn(el.value); drawObjects(); scheduleDraftSave(); };
   };
   bind('#iText', v => { o.text = v; });
   bind('#iW', v => { o.nw = +v / 100; sizes[o.kind] = { w: o.nw, h: o.nh }; persist(); });
@@ -399,6 +480,7 @@ function updateInspector() {
 
 async function renderThumbs() {
   if (!previewDoc) return;
+  previewErrors = [];
   const box = $('#thumbs');
   box.innerHTML = '';
   for (let n = 1; n <= previewDoc.numPages; n++) {
@@ -436,10 +518,27 @@ async function renderThumbs() {
     wrap.append(pick, preview, move);
     wrap.classList.toggle('marked', deletePages.has(n));
     box.append(wrap);
-    const p = await previewDoc.getPage(n);
-    const v = p.getViewport({ scale: .16 });
-    c.width = v.width; c.height = v.height;
-    await p.render({ canvasContext: c.getContext('2d')!, viewport: v }).promise;
+    try {
+      const p = await previewDoc.getPage(n);
+      const v = p.getViewport({ scale: .16 });
+      c.width = v.width; c.height = v.height;
+      await p.render({ canvasContext: c.getContext('2d')!, viewport: v }).promise;
+    } catch (err) {
+      console.error('[preview-page]', n, err);
+      previewErrors.push(n);
+      wrap.classList.add('previewError');
+      lab.textContent = 'หน้า ' + n + ' • เปิดไม่ได้';
+      c.width = 120;
+      c.height = 160;
+      const g = c.getContext('2d');
+      if (g) {
+        g.fillStyle = '#fff3f3';
+        g.fillRect(0, 0, c.width, c.height);
+        g.fillStyle = '#a94455';
+        g.font = '12px sans-serif';
+        g.fillText('Preview error', 18, 80);
+      }
+    }
   }
   markThumb(); updateDeleteCount();
 }
@@ -484,6 +583,8 @@ async function reloadApproval(bytes: ArrayBuffer) {
   page = Math.min(Math.max(1, page), previewDoc.numPages);
   zoomMode = 'fit';
   await drawPreview(); await renderThumbs(); updateInspector();
+  preflightReady = previewErrors.length === 0;
+  scheduleDraftSave();
 }
 
 async function appendApprovalFiles(files: File[]) {
@@ -572,11 +673,91 @@ function showModal(title: string, body: string) {
 
 function historyDb() {
   return new Promise<IDBDatabase>((res, rej) => {
-    const r = indexedDB.open('DocumentWorkspaceArchive', 1);
-    r.onupgradeneeded = () => { const db = r.result; if (!db.objectStoreNames.contains('docs')) db.createObjectStore('docs', { keyPath: 'id' }); };
+    const r = indexedDB.open('DocumentWorkspaceArchive', 2);
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      if (!db.objectStoreNames.contains('docs')) db.createObjectStore('docs', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('drafts')) db.createObjectStore('drafts', { keyPath: 'id' });
+    };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
   });
+}
+
+async function saveActiveDraft() {
+  if (!currentPdf || !approvalBytes) return;
+  const db = await historyDb();
+  const row: DraftRecord = {
+    id: 'active',
+    name: currentPdf.name,
+    lastModified: currentPdf.lastModified || Date.now(),
+    company,
+    page,
+    objects: JSON.parse(JSON.stringify(objects)),
+    blob: new Blob([approvalBytes.slice(0)], { type: 'application/pdf' }),
+    savedAt: new Date().toISOString()
+  };
+  await new Promise<void>((res, rej) => {
+    const tx = db.transaction('drafts', 'readwrite');
+    tx.objectStore('drafts').put(row);
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+  db.close();
+  const st = document.querySelector('#status');
+  if (st && preflightReady) st.textContent = '✓ Auto-saved • พร้อมวางจุดอนุมัติ • ' + (previewDoc?.numPages || 0) + ' หน้า';
+}
+
+async function getActiveDraft() {
+  const db = await historyDb();
+  const row = await new Promise<DraftRecord | undefined>((res, rej) => {
+    const tx = db.transaction('drafts', 'readonly');
+    const r = tx.objectStore('drafts').get('active');
+    r.onsuccess = () => res(r.result as DraftRecord | undefined);
+    r.onerror = () => rej(r.error);
+  });
+  db.close();
+  return row;
+}
+
+async function clearActiveDraft() {
+  const db = await historyDb();
+  await new Promise<void>((res, rej) => {
+    const tx = db.transaction('drafts', 'readwrite');
+    tx.objectStore('drafts').delete('active');
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+  db.close();
+}
+
+async function offerDraftRestore() {
+  try {
+    const row = await getActiveDraft();
+    if (!row?.blob) return;
+    showModal('พบงานที่ยังไม่เสร็จ', `<div class='draftRecovery'><b>${row.name}</b><span>บันทึกล่าสุด ${new Date(row.savedAt).toLocaleString('th-TH')}</span><p>สามารถเปิดงานเดิมต่อได้ จุดลายเซ็นและตำแหน่งที่วางไว้จะกลับมาด้วย</p><div class='row'><button id='restoreDraft' class='btn primary'>เปิดงานเดิมต่อ</button><button id='discardDraft' class='btn danger'>ล้าง Draft</button></div></div>`);
+    ($('#restoreDraft') as HTMLButtonElement).onclick = async () => {
+      company = companies.some(c => c.code === row.company) ? row.company : company;
+      currentPdf = new File([row.blob], row.name, { type: 'application/pdf', lastModified: row.lastModified || Date.now() });
+      objects = JSON.parse(JSON.stringify(row.objects || []));
+      document.querySelector('#modal')?.remove();
+      render();
+      const ok = await loadApprovalFile(currentPdf, true);
+      if (ok && previewDoc) {
+        page = Math.min(Math.max(1, row.page || 1), previewDoc.numPages);
+        await drawPreview();
+        markThumb();
+        updateInspector();
+        scheduleDraftSave();
+      }
+    };
+    ($('#discardDraft') as HTMLButtonElement).onclick = async () => {
+      await clearActiveDraft();
+      document.querySelector('#modal')?.remove();
+    };
+  } catch (err) {
+    console.error('[draft-restore]', err);
+  }
 }
 
 async function storeHistoryBlob(id: string, blob: Blob, name: string) {
@@ -697,7 +878,9 @@ async function saveAsPdf() {
     const histId = 'doc_' + Date.now() + '_' + uid();
     await storeHistoryBlob(histId, blob, name);
     history.unshift({ id: histId, date: new Date().toISOString(), company: comp().name, fileName: name, signers: names.join(', ') });
-    persist(); st.textContent = '✓ บันทึกไฟล์เรียบร้อยแล้ว';
+    persist();
+    await clearActiveDraft();
+    st.textContent = '✓ บันทึกไฟล์เรียบร้อยแล้ว • Draft ถูกปิดแล้ว';
   } catch (e: unknown) {
     console.error(e); st.textContent = 'บันทึกไม่สำเร็จ: ' + (e instanceof Error ? e.message : String(e));
   } finally {
@@ -836,3 +1019,4 @@ function loadImg(file: File) {
 }
 
 render();
+void offerDraftRestore();
