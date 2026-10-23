@@ -3,6 +3,8 @@ const REQUESTS_SHEET = 'Requests';
 const PACKETS_SHEET = 'Packets';
 const AUDIT_SHEET = 'Audit';
 const CONFIG_SHEET = 'Config';
+const COMPANIES_SHEET = 'Companies';
+const SIGNERS_SHEET = 'Signers';
 
 function doGet(e) {
   try {
@@ -16,6 +18,9 @@ function doGet(e) {
     });
     if (action === 'listRequests') return json_({ ok: true, requests: listRecords_(REQUESTS_SHEET) });
     if (action === 'listPackets') return json_({ ok: true, packets: listRecords_(PACKETS_SHEET) });
+    if (action === 'listCompanies') return json_({ ok: true, companies: listActiveCompanies_() });
+    if (action === 'listSigners') return json_({ ok: true, signers: listActiveSigners_(String(e.parameter.companyCode || '')) });
+    if (action === 'getConfig') return json_({ ok: true, config: configMap_() });
     if (action === 'getRequest') return json_({ ok: true, request: getRecord_(REQUESTS_SHEET, String(e.parameter.id || '')) });
     throw new Error('Unsupported action: ' + action);
   } catch (err) {
@@ -81,6 +86,46 @@ function auditHeaders_() {
   return ['id','entityType','entityId','action','detail','actorEmail','at'];
 }
 
+function configMap_() {
+  const sh = ensureSheet_(CONFIG_SHEET);
+  const rows = sh.getDataRange().getValues();
+  const out = {};
+  for (let i = 1; i < rows.length; i++) {
+    const key = String(rows[i][0] || '').trim();
+    if (key) out[key] = rows[i][1];
+  }
+  return out;
+}
+
+function listActiveCompanies_() {
+  return listRecords_(COMPANIES_SHEET).filter(r => r.active === true || String(r.active).toUpperCase() === 'TRUE');
+}
+
+function listActiveSigners_(companyCode) {
+  return listRecords_(SIGNERS_SHEET).filter(r => {
+    const active = r.active === true || String(r.active).toUpperCase() === 'TRUE';
+    if (!active) return false;
+    let codes = [];
+    try { codes = JSON.parse(String(r.companyCodesJson || '[]')); } catch (_) { codes = []; }
+    if (!companyCode) return true;
+    return codes.map(String).includes(String(companyCode));
+  }).map(r => {
+    let codes = [];
+    try { codes = JSON.parse(String(r.companyCodesJson || '[]')); } catch (_) { codes = []; }
+    r.companyCodes = codes;
+    delete r.companyCodesJson;
+    return r;
+  });
+}
+
+function signerByKey_(key) {
+  return listActiveSigners_('').find(r => String(r.signerKey) === String(key)) || null;
+}
+
+function companyByCode_(code) {
+  return listActiveCompanies_().find(r => String(r.companyCode) === String(code)) || null;
+}
+
 function listRecords_(sheetName) {
   const sh = ensureSheet_(sheetName);
   const rows = sh.getDataRange().getValues();
@@ -111,10 +156,13 @@ function saveRequest_(input) {
   const headers = requestHeaders_();
   ensureHeaders_(sh, headers);
   const now = new Date().toISOString();
+  const companyCode = String(input.companyCode || '').trim();
+  if (!companyCode) throw new Error('กรุณาระบุบริษัท');
+  if (!companyByCode_(companyCode)) throw new Error('ไม่พบบริษัทใน Company Master: ' + companyCode);
   const record = {
     id: String(input.id || Utilities.getUuid()),
     requestNo: String(input.requestNo || makeNo_('REQ')),
-    companyCode: String(input.companyCode || ''),
+    companyCode: companyCode,
     department: String(input.department || ''),
     requesterName: String(input.requesterName || currentUser_()),
     title: String(input.title || ''),
@@ -150,11 +198,23 @@ function createPacket_(input) {
   ensureHeaders_(sh, headers);
   const ids = Array.isArray(input.requestIds) ? input.requestIds.map(String).filter(Boolean) : [];
   if (!ids.length) throw new Error('Packet must contain at least one request');
+  const signerKey = String(input.signerKey || '').trim();
+  const signer = signerByKey_(signerKey);
+  if (!signer) throw new Error('ไม่พบผู้ลงนามใน Signer Master');
+  const packetRequests = ids.map(requestId => getRecord_(REQUESTS_SHEET, requestId));
+  const missing = packetRequests.filter(r => !r);
+  if (missing.length) throw new Error('มีเอกสารในชุดที่ไม่พบข้อมูล');
+  packetRequests.forEach(req => {
+    if (!Array.isArray(req.markers) || !req.markers.length) throw new Error('เอกสาร ' + req.requestNo + ' ยังไม่มีจุดอนุมัติ');
+    let allowed = [];
+    try { allowed = JSON.parse(String(signer.companyCodesJson || '[]')); } catch (_) { allowed = []; }
+    if (!allowed.map(String).includes(String(req.companyCode))) throw new Error('ผู้ลงนามนี้ไม่ได้รับอนุญาตสำหรับบริษัท ' + req.companyCode);
+  });
   const now = new Date().toISOString();
   const record = {
     id: String(input.id || Utilities.getUuid()),
     packetNo: String(input.packetNo || makeNo_('PKT')),
-    signerKey: String(input.signerKey || ''),
+    signerKey: signerKey,
     requestIdsJson: JSON.stringify(ids),
     mode: String(input.mode || 'executive'),
     proxyReason: String(input.proxyReason || ''),
@@ -175,11 +235,16 @@ function proxyApprovePacket_(input) {
   if (!packet) throw new Error('Packet not found');
   const reason = String(input.reason || '').trim();
   if (!reason) throw new Error('กรุณาระบุเหตุผลการอนุมัติแทน');
+  const signer = signerByKey_(String(packet.signerKey || ''));
+  if (!signer) throw new Error('ไม่พบผู้ลงนามของชุดนี้ใน Signer Master');
   const requests = Array.isArray(packet.requestIds) ? packet.requestIds : [];
   requests.forEach(requestId => {
     const req = getRecord_(REQUESTS_SHEET, String(requestId));
     if (!req) return;
     if (!Array.isArray(req.markers) || !req.markers.length) throw new Error('เอกสาร ' + req.requestNo + ' ยังไม่มีจุดอนุมัติ');
+    let allowed = [];
+    try { allowed = JSON.parse(String(signer.companyCodesJson || '[]')); } catch (_) { allowed = []; }
+    if (!allowed.map(String).includes(String(req.companyCode))) throw new Error('ผู้ลงนามนี้ไม่ได้รับอนุญาตสำหรับบริษัท ' + req.companyCode);
     req.status = 'approved_proxy';
     req.returnedComment = '';
     saveRequest_(req);
@@ -229,10 +294,15 @@ function uploadApproved_(input) {
 }
 
 function uploadPdf_(input, folderName) {
-  const rootId = getRootFolderId_();
-  if (!rootId) throw new Error('APPROVAL_ROOT_FOLDER_ID is not configured');
-  const root = DriveApp.getFolderById(rootId);
-  const folder = childFolder_(root, folderName);
+  const cfg = configMap_();
+  let folder = null;
+  if (folderName === 'Approved' && cfg.APPROVED_FOLDER_ID) folder = DriveApp.getFolderById(String(cfg.APPROVED_FOLDER_ID));
+  if (!folder) {
+    const rootId = getRootFolderId_();
+    if (!rootId) throw new Error('ROOT_FOLDER_ID is not configured');
+    const root = DriveApp.getFolderById(rootId);
+    folder = childFolder_(root, folderName);
+  }
   const name = String(input.name || (folderName + '_' + new Date().getTime() + '.pdf'));
   const base64 = String(input.base64 || '').replace(/^data:application\/pdf;base64,/, '');
   if (!base64) throw new Error('Missing PDF content');
@@ -247,7 +317,8 @@ function childFolder_(parent, name) {
 }
 
 function getRootFolderId_() {
-  return PropertiesService.getScriptProperties().getProperty('APPROVAL_ROOT_FOLDER_ID') || '';
+  const cfg = configMap_();
+  return String(cfg.ROOT_FOLDER_ID || PropertiesService.getScriptProperties().getProperty('APPROVAL_ROOT_FOLDER_ID') || '');
 }
 
 function currentUser_() {
