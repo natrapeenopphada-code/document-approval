@@ -1,9 +1,20 @@
-
-import { apiGet, apiPost, getApprovalApiUrl, type ApprovalPacketRecord, type ApprovalRequestRecord } from './online-api';
+import {
+  apiGet,
+  apiPost,
+  getApprovalApiUrl,
+  listOnlineSigners,
+  type ApprovalPacketRecord,
+  type ApprovalRequestRecord,
+  type SignerMaster
+} from './online-api';
 
 let requests: ApprovalRequestRecord[] = [];
 let packets: ApprovalPacketRecord[] = [];
+let signers: SignerMaster[] = [];
 let selected = new Set<string>();
+let loadedCompany = '';
+let loaded = false;
+let loading = false;
 
 function esc(value: unknown) {
   return String(value ?? '').replace(/[&<>"']/g, function(ch) {
@@ -12,30 +23,43 @@ function esc(value: unknown) {
   });
 }
 
-export function onlineWorkspaceHtml(mode: 'inbox' | 'packets', signerOptions: Array<[string,string]>) {
+export function invalidateOnlineWorkspace() {
+  loaded = false;
+  loadedCompany = '';
+  signers = [];
+}
+
+export function onlineWorkspaceHtml(mode: 'inbox' | 'packets', companyCode: string) {
   const api = getApprovalApiUrl();
   const banner = '<div class="onlineBanner ' + (api ? 'configured' : 'missing') + '"><div><b>' +
     (api ? 'ONLINE BACKEND' : 'ยังไม่ได้เชื่อม Online Backend') + '</b><span>' +
-    (api ? 'Apps Script API ถูกตั้งค่าแล้ว' : 'ไปที่ “ตั้งค่า” เพื่อใส่ Web App URL ของระบบอนุมัติเอกสาร') +
+    (api ? 'ข้อมูลกลาง: Google Sheet + Drive' : 'ไปที่ “ตั้งค่า” เพื่อใส่ Web App URL ของระบบอนุมัติเอกสาร') +
     '</span></div><button id="refreshOnline">รีเฟรชข้อมูล</button></div>';
+
   if (mode === 'inbox') {
-    const options = signerOptions.map(function(s) { return '<option value="' + esc(s[0]) + '">' + esc(s[1]) + '</option>'; }).join('');
+    const options = signers
+      .filter(function(s) { return !s.companyCodes || s.companyCodes.includes(companyCode); })
+      .map(function(s) { return '<option value="' + esc(s.signerKey) + '">' + esc(s.displayName) + '</option>'; })
+      .join('');
     return '<div class="appTop"><div><div class="eyebrow">SECRETARY APPROVAL INBOX</div><h2>กล่องเอกสารรออนุมัติ</h2><p>ตรวจเอกสาร เลือกหลายรายการ และสร้าง Approval Packet</p></div></div>' +
       banner +
-      '<div id="onlineStatus" class="status">พร้อมโหลดข้อมูล</div>' +
+      '<div id="onlineStatus" class="status">' + (loading ? 'กำลังโหลดข้อมูล...' : (loaded ? '✓ ข้อมูลออนไลน์พร้อมใช้งาน' : 'พร้อมโหลดข้อมูล')) + '</div>' +
       '<div class="packetBar"><label><input id="selectAllRequests" type="checkbox"> เลือกทั้งหมด</label>' +
-      '<select id="packetSigner">' + options + '</select><button id="createPacketBtn" class="primary">สร้างชุดอนุมัติ <span id="packetCount"></span></button></div>' +
-      '<div id="requestGrid" class="requestGrid">' + requestRows() + '</div>';
+      '<select id="packetSigner">' + (options || '<option value="">ยังไม่มีผู้ลงนามสำหรับบริษัทนี้</option>') + '</select>' +
+      '<button id="createPacketBtn" class="primary">สร้างชุดอนุมัติ <span id="packetCount">' + (selected.size ? '(' + selected.size + ')' : '') + '</span></button></div>' +
+      '<div id="requestGrid" class="requestGrid">' + requestRows(companyCode) + '</div>';
   }
-  return '<div class="appTop"><div><div class="eyebrow">APPROVAL PACKETS</div><h2>ชุดอนุมัติ</h2><p>ส่งให้ผู้บริหาร หรืออนุมัติแทนเป็นชุด โดยแต่ละเอกสารยังเก็บ Marker ของตัวเอง</p></div></div>' +
+
+  return '<div class="appTop"><div><div class="eyebrow">APPROVAL PACKETS</div><h2>ชุดอนุมัติ</h2><p>ส่งให้ผู้บริหาร หรืออนุมัติแทนเป็นชุด โดยแต่ละเอกสารเก็บ Marker ของตัวเอง</p></div></div>' +
     banner +
-    '<div id="onlineStatus" class="status">พร้อมโหลดข้อมูล</div>' +
-    '<div id="packetGrid" class="packetGrid">' + packetRows(signerOptions) + '</div>';
+    '<div id="onlineStatus" class="status">' + (loading ? 'กำลังโหลดข้อมูล...' : (loaded ? '✓ ข้อมูลออนไลน์พร้อมใช้งาน' : 'พร้อมโหลดข้อมูล')) + '</div>' +
+    '<div id="packetGrid" class="packetGrid">' + packetRows(companyCode) + '</div>';
 }
 
-function requestRows() {
-  if (!requests.length) return '<div class="emptyOnline">ยังไม่มีรายการ หรือยังไม่ได้เชื่อม Online Backend</div>';
-  return requests.map(function(item) {
+function requestRows(companyCode: string) {
+  const rows = requests.filter(function(item) { return !companyCode || item.companyCode === companyCode; });
+  if (!rows.length) return '<div class="emptyOnline">ยังไม่มีเอกสารของบริษัทนี้</div>';
+  return rows.map(function(item) {
     const checked = selected.has(item.id);
     const ready = Array.isArray(item.markers) && item.markers.length > 0;
     return '<article class="requestCard ' + (checked ? 'selected' : '') + '">' +
@@ -47,51 +71,76 @@ function requestRows() {
   }).join('');
 }
 
-function labelForSigner(key: string, signerOptions: Array<[string,string]>) {
-  const found = signerOptions.find(function(s) { return s[0] === key; });
-  return found ? found[1] : key || '-';
+function labelForSigner(key: string) {
+  const found = signers.find(function(s) { return s.signerKey === key; });
+  return found ? found.displayName : key || '-';
 }
 
-function packetRows(signerOptions: Array<[string,string]>) {
-  if (!packets.length) return '<div class="emptyOnline">ยังไม่มี Approval Packet</div>';
-  return packets.map(function(packet) {
+function packetRows(companyCode: string) {
+  const rows = packets.filter(function(packet) {
+    const docs = requests.filter(function(r) { return (packet.requestIds || []).includes(r.id); });
+    return !companyCode || docs.some(function(r) { return r.companyCode === companyCode; });
+  });
+  if (!rows.length) return '<div class="emptyOnline">ยังไม่มี Approval Packet ของบริษัทนี้</div>';
+  return rows.map(function(packet) {
     return '<article class="packetCard"><div><span class="packetNo">' + esc(packet.packetNo || packet.id) + '</span><strong>' +
-      esc(labelForSigner(packet.signerKey, signerOptions)) + '</strong><small>' + String((packet.requestIds || []).length) + ' เอกสาร • ' + esc(packet.status || '-') +
+      esc(labelForSigner(packet.signerKey)) + '</strong><small>' + String((packet.requestIds || []).length) + ' เอกสาร • ' + esc(packet.status || '-') +
       '</small></div><div class="packetActions"><button data-open-packet="' + esc(packet.id) + '">ดูรายการ</button>' +
       (packet.status !== 'completed' ? '<button data-proxy-packet="' + esc(packet.id) + '" class="primary">อนุมัติแทนทั้งชุด</button>' : '') +
       '</div></article>';
   }).join('');
 }
 
-async function loadOnline() {
-  const status = document.querySelector('#onlineStatus') as HTMLElement | null;
-  if (!getApprovalApiUrl()) {
-    if (status) status.textContent = 'ยังไม่ได้ตั้งค่า Apps Script Web App URL';
-    return;
-  }
-  if (status) status.textContent = 'กำลังโหลดข้อมูลออนไลน์...';
+async function loadOnline(companyCode: string) {
+  if (!getApprovalApiUrl()) throw new Error('ยังไม่ได้ตั้งค่า Apps Script Web App URL');
+  if (loading) return;
+  loading = true;
   try {
-    const rr = await apiGet<{ok:boolean;requests:ApprovalRequestRecord[]}>('listRequests');
-    const pp = await apiGet<{ok:boolean;packets:ApprovalPacketRecord[]}>('listPackets');
+    const [rr, pp, ss] = await Promise.all([
+      apiGet<{ok:boolean;requests:ApprovalRequestRecord[]}>('listRequests'),
+      apiGet<{ok:boolean;packets:ApprovalPacketRecord[]}>('listPackets'),
+      listOnlineSigners(companyCode)
+    ]);
     requests = rr.requests || [];
     packets = pp.packets || [];
-    selected = new Set(Array.from(selected).filter(function(id) { return requests.some(function(r) { return r.id === id; }); }));
-    if (status) status.textContent = '✓ เชื่อม Online Backend แล้ว • ' + requests.length + ' เอกสาร • ' + packets.length + ' ชุด';
-  } catch (err) {
-    if (status) status.textContent = 'เชื่อม Online Backend ไม่สำเร็จ: ' + (err instanceof Error ? err.message : String(err));
+    signers = ss || [];
+    selected = new Set(Array.from(selected).filter(function(id) {
+      return requests.some(function(r) { return r.id === id && (!companyCode || r.companyCode === companyCode); });
+    }));
+    loaded = true;
+    loadedCompany = companyCode;
+  } finally {
+    loading = false;
   }
 }
 
-export function wireOnlineWorkspace(mode: 'inbox' | 'packets', signerOptions: Array<[string,string]>, rerender: () => void, showPacket: (title:string, body:string) => void) {
+export function wireOnlineWorkspace(
+  mode: 'inbox' | 'packets',
+  companyCode: string,
+  rerender: () => void,
+  showPacket: (title:string, body:string) => void
+) {
   const refresh = document.querySelector('#refreshOnline') as HTMLButtonElement | null;
-  if (refresh) refresh.onclick = async function() { await loadOnline(); rerender(); };
+  if (refresh) refresh.onclick = async function() {
+    loaded = false;
+    const st = document.querySelector('#onlineStatus') as HTMLElement | null;
+    if (st) st.textContent = 'กำลังรีเฟรชข้อมูลออนไลน์...';
+    try {
+      await loadOnline(companyCode);
+      rerender();
+    } catch (err) {
+      if (st) st.textContent = 'เชื่อม Online Backend ไม่สำเร็จ: ' + (err instanceof Error ? err.message : String(err));
+    }
+  };
 
   if (mode === 'inbox') {
+    const visibleRequests = requests.filter(function(r) { return !companyCode || r.companyCode === companyCode; });
     const all = document.querySelector('#selectAllRequests') as HTMLInputElement | null;
     if (all) all.onchange = function() {
-      selected = all.checked ? new Set(requests.map(function(r) { return r.id; })) : new Set();
+      selected = all.checked ? new Set(visibleRequests.map(function(r) { return r.id; })) : new Set();
       rerender();
     };
+
     Array.from(document.querySelectorAll('[data-request-pick]')).forEach(function(node) {
       const el = node as HTMLInputElement;
       el.onchange = function() {
@@ -101,17 +150,27 @@ export function wireOnlineWorkspace(mode: 'inbox' | 'packets', signerOptions: Ar
         if (count) count.textContent = selected.size ? '(' + selected.size + ')' : '';
       };
     });
+
     const create = document.querySelector('#createPacketBtn') as HTMLButtonElement | null;
     if (create) create.onclick = async function() {
       const ids = Array.from(selected);
       if (!ids.length) return alert('กรุณาเลือกเอกสารอย่างน้อย 1 รายการ');
-      const blocked = requests.filter(function(r) { return ids.includes(r.id) && !(Array.isArray(r.markers) && r.markers.length); });
+      const chosen = requests.filter(function(r) { return ids.includes(r.id); });
+      const wrongCompany = chosen.some(function(r) { return r.companyCode !== companyCode; });
+      if (wrongCompany) return alert('Approval Packet หนึ่งชุดต้องเป็นบริษัทเดียวกัน');
+      const blocked = chosen.filter(function(r) { return !(Array.isArray(r.markers) && r.markers.length); });
       if (blocked.length) return alert('ยังสร้างชุดไม่ได้ มี ' + blocked.length + ' เอกสารที่ยังไม่ได้วางจุดอนุมัติ');
       const signer = (document.querySelector('#packetSigner') as HTMLSelectElement | null)?.value || '';
-      await apiPost('createPacket', { requestIds: ids, signerKey: signer, mode: 'executive', status: 'draft' });
-      selected.clear();
-      await loadOnline();
-      rerender();
+      if (!signer) return alert('ยังไม่มีผู้ลงนามสำหรับบริษัทนี้');
+      try {
+        await apiPost('createPacket', { requestIds: ids, signerKey: signer, mode: 'executive', status: 'draft' });
+        selected.clear();
+        loaded = false;
+        await loadOnline(companyCode);
+        rerender();
+      } catch (err) {
+        alert('สร้างชุดไม่สำเร็จ: ' + (err instanceof Error ? err.message : String(err)));
+      }
     };
   } else {
     Array.from(document.querySelectorAll('[data-proxy-packet]')).forEach(function(node) {
@@ -121,11 +180,17 @@ export function wireOnlineWorkspace(mode: 'inbox' | 'packets', signerOptions: Ar
         const reason = window.prompt('เหตุผลการอนุมัติแทน เช่น ผู้บริหารเดินทางต่างประเทศ');
         if (!reason?.trim()) return;
         if (!window.confirm('ยืนยันอนุมัติแทนทั้งชุดหรือไม่? ระบบจะบันทึกเหตุผลและ Audit Trail ทุกเอกสาร')) return;
-        await apiPost('proxyApprovePacket', { id: id, reason: reason.trim() });
-        await loadOnline();
-        rerender();
+        try {
+          await apiPost('proxyApprovePacket', { id: id, reason: reason.trim() });
+          loaded = false;
+          await loadOnline(companyCode);
+          rerender();
+        } catch (err) {
+          alert('อนุมัติแทนไม่สำเร็จ: ' + (err instanceof Error ? err.message : String(err)));
+        }
       };
     });
+
     Array.from(document.querySelectorAll('[data-open-packet]')).forEach(function(node) {
       const el = node as HTMLButtonElement;
       el.onclick = function() {
@@ -141,5 +206,14 @@ export function wireOnlineWorkspace(mode: 'inbox' | 'packets', signerOptions: Ar
     });
   }
 
-  void loadOnline().then(function() { rerender(); });
+  if (!loaded || loadedCompany !== companyCode) {
+    const st = document.querySelector('#onlineStatus') as HTMLElement | null;
+    if (st) st.textContent = 'กำลังโหลดข้อมูลออนไลน์...';
+    void loadOnline(companyCode)
+      .then(function() { rerender(); })
+      .catch(function(err) {
+        const status = document.querySelector('#onlineStatus') as HTMLElement | null;
+        if (status) status.textContent = 'เชื่อม Online Backend ไม่สำเร็จ: ' + (err instanceof Error ? err.message : String(err));
+      });
+  }
 }
