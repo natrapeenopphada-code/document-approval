@@ -1,11 +1,11 @@
-const OA_OA_APPROVAL_HISTORY_SHEET_ID = '1PC7pGX-28NqCak_5bKdSRNT23LNUdACZDC4j1qb-Tj8';
-const OA_OA_REQUESTS_SHEET = 'Requests';
-const OA_OA_PACKETS_SHEET = 'Packets';
-const OA_OA_AUDIT_SHEET = 'Audit';
-const OA_OA_CONFIG_SHEET = 'Config';
-const OA_OA_COMPANIES_SHEET = 'Companies';
-const OA_OA_SIGNERS_SHEET = 'Signers';
-const OA_OA_DELEGATIONS_SHEET = 'Delegations';
+const OA_APPROVAL_HISTORY_SHEET_ID = '1PC7pGX-28NqCak_5bKdSRNT23LNUdACZDC4j1qb-Tj8';
+const OA_REQUESTS_SHEET = 'Requests';
+const OA_PACKETS_SHEET = 'Packets';
+const OA_AUDIT_SHEET = 'Audit';
+const OA_CONFIG_SHEET = 'Config';
+const OA_COMPANIES_SHEET = 'Companies';
+const OA_SIGNERS_SHEET = 'Signers';
+const OA_DELEGATIONS_SHEET = 'Delegations';
 
 function oa_approvalApiDoGet_(e) {
   try {
