@@ -1,4 +1,6 @@
 import './styles.css';
+import { invalidateOnlineWorkspace, onlineWorkspaceHtml, wireOnlineWorkspace } from './online-workspace';
+import { getApprovalApiUrl, setApprovalApiUrl, testApprovalApi } from './online-api';
 
 declare global {
   interface Window {
@@ -122,7 +124,9 @@ function render() {
         <div><h1>อนุมัติเอกสาร</h1><div class='sub'>DOCUMENT WORKSPACE</div></div>
       </div>
       <div class='nav'>
-        <button data-view='approve' class='${view === 'approve' ? 'active' : ''}'>อนุมัติเอกสาร</button>
+        <button data-view='inbox' class='${view === 'inbox' ? 'active' : ''}'>กล่องเอกสาร</button>
+        <button data-view='packets' class='${view === 'packets' ? 'active' : ''}'>ชุดอนุมัติ</button>
+        <button data-view='approve' class='${view === 'approve' ? 'active' : ''}'>วางจุดอนุมัติ</button>
         <button data-view='tools' class='${view === 'tools' ? 'active' : ''}'>เครื่องมือเอกสาร</button>
         <button id='historyBtn'>ประวัติการอนุมัติ</button>
         <button id='settingsBtn'>ตั้งค่า</button>
@@ -133,7 +137,7 @@ function render() {
       </div>
       ${view === 'approve' ? `<div class='field'><label>PDF ต้นฉบับ</label><input id='pdfFile' type='file' accept='.pdf,application/pdf'></div><div class='thumbTitle'>หน้าเอกสาร</div><div id='thumbs' class='thumbs'></div>` : ''}
     </aside>
-    <main class='main'>${view === 'tools' ? toolsHtml() : approveHtml()}</main>
+    <main class='main'>${view === 'tools' ? toolsHtml() : (view === 'inbox' || view === 'packets') ? onlineWorkspaceHtml(view as 'inbox' | 'packets', company) : approveHtml()}</main>
     ${view === 'approve' ? `<aside id='inspector' class='inspect'></aside>` : ''}
   </div>`;
 
@@ -144,12 +148,14 @@ function render() {
 
   ($('#company') as HTMLSelectElement).onchange = e => {
     company = (e.target as HTMLSelectElement).value;
+    invalidateOnlineWorkspace();
     render();
   };
 
   $('#settingsBtn').onclick = showSettings;
   $('#historyBtn').onclick = showHistory;
   if (view === 'tools') wireTools();
+  else if (view === 'inbox' || view === 'packets') wireOnlineWorkspace(view as 'inbox' | 'packets', company, render, showModal);
   else wireApprove();
 }
 
@@ -628,12 +634,30 @@ async function deleteSelectedApprovalPages() {
 }
 
 function showSettings() {
+  const apiUrl = getApprovalApiUrl();
   const rows: [string, string][] = [['signature_sig1', 'ลายเซ็น คุณนพดา'], ['signature_sig2', 'ลายเซ็น คุณกานต์'], ['signature_sig3', 'ลายเซ็น คุณชลกนก']];
   companies.forEach(c => {
     rows.push(['stamp_' + c.code, 'ตราปั๊ม — ' + c.name], ['logo_' + c.code, 'โลโก้ — ' + c.name]);
     c.signers.forEach(s => rows.push(['combined_' + c.code + '_' + s[0], s[1] + ' + ตรา — ' + c.name]));
   });
-  showModal('ตั้งค่าลายเซ็น / ตรา / โลโก้', `<div class='settingGrid'>${rows.map(r => `<label class='assetRow'><div><b>${r[1]}</b><small>${assets[r[0]] ? '✓ บันทึกแล้ว' : 'ยังไม่มีไฟล์'}</small></div><input data-asset='${r[0]}' type='file' accept='image/png,image/jpeg'></label>`).join('')}</div>`);
+  showModal('ตั้งค่าระบบ / ลายเซ็น / ตรา / โลโก้', `<div class='onlineSettings'><div><b>Online Approval Backend</b><small>Apps Script “อนุมัติเอกสาร” + Google Sheet/Drive เดิม</small></div><input id='approvalApiUrl' value='${apiUrl}' placeholder='https://script.google.com/macros/s/.../exec'><div class='row'><button id='saveApiUrl' class='btn primary'>บันทึก URL</button><button id='testApiUrl' class='btn'>ทดสอบการเชื่อมต่อ</button></div><div id='apiTestStatus' class='status'>${apiUrl ? 'ตั้งค่า URL แล้ว' : 'ยังไม่ได้ตั้งค่า URL'}</div></div><div class='settingGrid'>${rows.map(r => `<label class='assetRow'><div><b>${r[1]}</b><small>${assets[r[0]] ? '✓ บันทึกแล้ว' : 'ยังไม่มีไฟล์'}</small></div><input data-asset='${r[0]}' type='file' accept='image/png,image/jpeg'></label>`).join('')}</div>`);
+  ($('#saveApiUrl') as HTMLButtonElement).onclick = () => {
+    const value = ($('#approvalApiUrl') as HTMLInputElement).value.trim();
+    setApprovalApiUrl(value);
+    ($('#apiTestStatus') as HTMLElement).textContent = value ? '✓ บันทึก URL แล้ว' : 'ล้าง URL แล้ว';
+  };
+  ($('#testApiUrl') as HTMLButtonElement).onclick = async () => {
+    const value = ($('#approvalApiUrl') as HTMLInputElement).value.trim();
+    setApprovalApiUrl(value);
+    const st = $('#apiTestStatus');
+    st.textContent = 'กำลังทดสอบ...';
+    try {
+      const health = await testApprovalApi();
+      st.textContent = '✓ เชื่อมต่อสำเร็จ • ' + (health.user || 'ผู้ใช้ไม่ระบุ') + (health.rootFolderId ? ' • Drive พร้อม' : ' • ยังไม่ได้ตั้ง Root Folder');
+    } catch (err) {
+      st.textContent = 'เชื่อมต่อไม่สำเร็จ: ' + (err instanceof Error ? err.message : String(err));
+    }
+  };
   $$('[data-asset]').forEach(el => (el as HTMLInputElement).onchange = async () => {
     const f = (el as HTMLInputElement).files?.[0];
     if (!f) return;
